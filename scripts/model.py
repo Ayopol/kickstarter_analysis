@@ -116,9 +116,9 @@ def important_words(model, vectorizer):
     return
 
 
-def show_learning_curve(model, X_train_transformed, y_train) :
+def show_learning_curve(model, X_train_transformed, y_train, train_size_max, step_size) :
 
-    train_sizes = np.arange(100,3000,100)
+    train_sizes = np.arange(100,train_size_max,step_size)
 
     # Get train scores (R2), train sizes, and validation scores using `learning_curve`
     train_sizes, train_scores, test_scores = learning_curve(
