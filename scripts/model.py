@@ -22,8 +22,14 @@ from sklearn.model_selection import learning_curve
 from sklearn.naive_bayes import MultinomialNB
 from collections import Counter
 
-
-
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from xgboost import XGBClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import RandomizedSearchCV
+import joblib
 
 
 ###---------------Functions---------------###
@@ -33,6 +39,7 @@ def model_creation(df) :
 
     X = df['comments_processed']
     y = df['state_encoded']
+
 
     # Train/Test Split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -89,7 +96,111 @@ def model_creation(df) :
 
     return model, vectorizer
 
+def df_cleaning_creation(df) :
 
+
+    filter = ['ID', 'name', 'main_category', 'currency', 'deadline', 'launched', 'state', 'country',
+          'usd_pledged_real', 'usd_goal_real']
+
+    df_filtered = df[filter]
+    df_filtered['deadline'] = pd.to_datetime(df_filtered['deadline'])
+    df_filtered['launched'] = pd.to_datetime(df_filtered['launched'])
+    df_filtered = df_filtered.dropna()
+
+    # Creating the delta time feature
+    df_filtered['delta_time'] = df_filtered['deadline'] - df_filtered['launched']
+    df_filtered['delta_time'] = df_filtered['delta_time'].dt.days
+
+    # Creating the practicability feature
+
+    df_filtered['practicability'] = df_filtered['usd_goal_real'] / df_filtered['delta_time']
+
+    # Creating the ratio features
+
+    df_filtered['ratio_goal_by_main_category'] = (df_filtered['usd_goal_real'] / df_filtered['mean_goal_main_cat'])   )
+    df_filtered['ratio_goal_by_country'] = (df_filtered['usd_goal_real'] / df_filtered['mean_goal_country'])   )
+
+    # Ratio de usd_goal_real par rapport à la moyenne des objectifs de la même main_category
+    df_filtered['ratio_goal_by_main_category'] = (df_filtered['usd_goal_real']
+        / df_filtered.groupby('main_category')['usd_goal_real'].transform('mean'))
+
+    # Ratio de usd_goal_real par rapport à la moyenne des objectifs par country
+    df_filtered['ratio_goal_by_country'] = ( df_filtered['usd_goal_real']
+                                            / df_filtered.groupby('country')['usd_goal_real'].transform('mean'))
+
+    # Longueur du titre : nombre de mots
+    df_filtered['title_word_count'] = df_filtered['name'].str.split().str.len()
+
+    # Keeping the only two valid state
+    df_final = df_filtered[df_filtered['state'].isin(['failed', 'successful'])]
+
+    return df_final
+
+def model_training_saving(df) :
+
+
+    y = df['state'].map({'successful':1, 'failed':0})
+    X = df.drop(columns=["state"])
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+
+
+    # Building the pipeline
+    numeric_features = ['usd_goal_real', 'ratio_goal_by_main_category', 'ratio_goal_by_country', 'title_word_count', 'delta_time']
+    categorical_features = ['main_category', 'country']
+
+
+    num_transformer = Pipeline(
+        steps = [
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ])
+
+    cat_transformer = Pipeline(
+        steps = [
+            ('imputer', SimpleImputer(strategy='most_frequent')),
+            ('onehot', OneHotEncoder(handle_unknown='ignore'))
+        ])
+
+    preprocessor = ColumnTransformer(
+        transformers = [
+            ('num', num_transformer, numeric_features),
+            ('cat', cat_transformer, categorical_features)
+        ], remainder='drop')
+
+    xgb_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('clf', XGBClassifier(
+        use_label_encoder=False,    # désactive l'ancien label encoder
+        eval_metric='logloss',      # métrique par défaut pour classif binaire
+        random_state=42
+    ))])
+
+    param_dist = {
+    'clf__n_estimators':    [100, 200, 300],
+    'clf__max_depth':       [3, 6, 9],
+    'clf__learning_rate':   [0.01, 0.1, 0.2],
+    'clf__subsample':       [0.7, 1.0],
+    'clf__colsample_bytree':[0.7, 1.0]}
+
+    search_acc = RandomizedSearchCV(
+    xgb_pipeline, param_dist,
+    n_iter=10, cv=5, scoring='accuracy', n_jobs=-1, random_state=42)
+
+    search_acc.fit(X_train, y_train)
+    print("Meilleurs paramètres :", search_acc.best_params_)
+
+    best_model = search_acc.best_estimator_
+    joblib.dump(best_model, 'kickstarter_model.pkl')
+    print('Model saved !')
+
+    # not sur of the following actions
+
+    y_pred  = best_model.predict(X_test)
+
+    print(classification_report(y_test, y_pred))
+
+    return
 
 ###---------------Diagnostic---------------###
 
