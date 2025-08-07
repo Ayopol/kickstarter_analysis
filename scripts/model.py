@@ -96,7 +96,6 @@ def model_creation(df) :
 
     return model, vectorizer
 
-def df_cleaning_creation(df) :
 
 
     filter = ['ID', 'name', 'main_category', 'currency', 'deadline', 'launched', 'state', 'country',
@@ -115,10 +114,6 @@ def df_cleaning_creation(df) :
 
     df_filtered['practicability'] = df_filtered['usd_goal_real'] / df_filtered['delta_time']
 
-    # Creating the ratio features
-
-    df_filtered['ratio_goal_by_main_category'] = (df_filtered['usd_goal_real'] / df_filtered['mean_goal_main_cat'])   )
-    df_filtered['ratio_goal_by_country'] = (df_filtered['usd_goal_real'] / df_filtered['mean_goal_country'])   )
 
     # Ratio de usd_goal_real par rapport à la moyenne des objectifs de la même main_category
     df_filtered['ratio_goal_by_main_category'] = (df_filtered['usd_goal_real']
@@ -187,6 +182,7 @@ def model_training_saving(df) :
     xgb_pipeline, param_dist,
     n_iter=10, cv=5, scoring='accuracy', n_jobs=-1, random_state=42)
 
+    # not sure of the following actions
     search_acc.fit(X_train, y_train)
     print("Meilleurs paramètres :", search_acc.best_params_)
 
@@ -194,7 +190,7 @@ def model_training_saving(df) :
     joblib.dump(best_model, 'kickstarter_model.pkl')
     print('Model saved !')
 
-    # not sur of the following actions
+    #
 
     y_pred  = best_model.predict(X_test)
 

@@ -5,8 +5,11 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 
 
+import joblib
+from pathlib import Path
 
 # Machine Learning
 from sklearn.linear_model import LogisticRegression
@@ -24,7 +27,6 @@ from collections import Counter
 
 
 ###---------------Functions---------------###
-
 
 def df_create_state_comments(url1,url2):
 
@@ -55,10 +57,15 @@ def df_create_state_comments(url1,url2):
 
 def df_clean_create(df):
 
+    # Keeping only the variables of interest
+
     filter = ['ID', 'name', 'main_category', 'currency', 'deadline', 'launched', 'state', 'country',
           'usd_pledged_real', 'usd_goal_real']
 
     df_filtered = df[filter]
+
+    # Convereting the dates into datatime
+
     df_filtered['deadline'] = pd.to_datetime(df_filtered['deadline'])
     df_filtered['launched'] = pd.to_datetime(df_filtered['launched'])
     df_filtered = df_filtered.dropna()
@@ -68,18 +75,58 @@ def df_clean_create(df):
     df_filtered['delta_time'] = df_filtered['delta_time'].dt.days
 
     # Creating the practicability feature
-
     df_filtered['practicability'] = df_filtered['usd_goal_real'] / df_filtered['delta_time']
 
-    # Creating the ratio features
 
-    df_filtered['ratio_goal_by_main_category'] = (df_filtered['usd_goal_real'] / df_filtered['mean_goal_main_cat'])   )
-    df_filtered['ratio_goal_by_country'] = (df_filtered['usd_goal_real'] / df_filtered['mean_goal_country'])   )
+    # Creating the mean goal dicts
+    mean_goal_by_cat = df_filtered.groupby('main_category')['usd_goal_real'].mean().to_dict()
+    mean_goal_by_country = df_filtered.groupby('country')['usd_goal_real'].mean().to_dict()
 
 
+    # Sauvegarde les means
 
-###---------------Preprocessing Text---------------###
+        # Créer le dossier s'il n'existe pas
+    save_dir = Path('save_pkl')
+    save_dir.mkdir(parents=True, exist_ok=True)
 
+        # Sauvegarder chaque dictionnaire dans un fichier différent
+    joblib.dump(mean_goal_by_cat, save_dir / 'mean_goal_by_cat.pkl')
+    joblib.dump(mean_goal_by_country, save_dir / 'mean_goal_by_country.pkl')
+
+
+    # Creating the columns ratio from the mean dicts
+    df_filtered['ratio_goal_by_main_category'] = df_filtered.apply(
+        lambda row: row['usd_goal_real'] / mean_goal_by_cat.get(row['main_category'], 1), axis=1)
+    df_filtered['ratio_goal_by_country'] = df_filtered.apply(
+        lambda row: row['usd_goal_real'] / mean_goal_by_country.get(row['country'], 1), axis=1)
+
+    # Longueur du titre : nombre de mots
+    df_filtered['title_word_count'] = df_filtered['name'].str.split().str.len()
+
+    # Keeping the only two valid state
+    df_final = df_filtered[df_filtered['state'].isin(['failed', 'successful'])]
+    
+    return df_final
+
+
+###---------------Preprocessing for the commenst---------------###
+
+# Fonction finale
+def preprocess(df):
+
+    print('Application du cleaning...')
+    df['comments_clean'] = df['comments'].apply(preprocess_cleaning)
+
+    print('Application du nltk')
+    df['comments_processed'] = df['comments_clean'].apply(preprocess_nltk)
+
+    label_encoder = LabelEncoder()
+    df['state_encoded'] = label_encoder.fit_transform(df['state'])
+    print(f"Classes encodées: {label_encoder.classes_}")
+
+    return df[['comments_processed', 'state_encoded']]
+
+# Cleaning
 
 def preprocess_cleaning(sentence):
 
@@ -101,7 +148,6 @@ def preprocess_cleaning(sentence):
 
     return sentence
 
-
 # Lemmatisation (optionnel, souvent TF-IDF suffit)
 
 def preprocess_nltk(text):
@@ -112,18 +158,3 @@ def preprocess_nltk(text):
     tokens = word_tokenize(text)
     lemmas = [lemmatizer.lemmatize(token) for token in tokens if len(token) > 1]
     return ' '.join(lemmas)
-
-
-def preprocess(df):
-
-    print('Application du cleaning...')
-    df['comments_clean'] = df['comments'].apply(preprocess_cleaning)
-
-    print('Application du nltk')
-    df['comments_processed'] = df['comments_clean'].apply(preprocess_nltk)
-
-    label_encoder = LabelEncoder()
-    df['state_encoded'] = label_encoder.fit_transform(df['state'])
-    print(f"Classes encodées: {label_encoder.classes_}")
-
-    return df[['comments_processed', 'state_encoded']]
