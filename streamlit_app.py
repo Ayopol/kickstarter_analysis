@@ -1,6 +1,5 @@
 import streamlit as st
-from app.predict import predict_project_success
-
+from scripts.predict import predict_project_success
 
 
 st.title("Kickstarter Project Success Predictor")
