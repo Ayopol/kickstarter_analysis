@@ -56,6 +56,9 @@ def df_create_state_comments(url1,url2):
     return df_merged
 
 def df_clean_create(df):
+    '''
+    Create the adequate df with all the necessary features for a futur model training
+    '''
 
     # Keeping only the variables of interest
 
@@ -64,7 +67,7 @@ def df_clean_create(df):
 
     df_filtered = df[filter]
 
-    # Convereting the dates into datatime
+    # Converting the dates into datatime
 
     df_filtered['deadline'] = pd.to_datetime(df_filtered['deadline'])
     df_filtered['launched'] = pd.to_datetime(df_filtered['launched'])
@@ -86,7 +89,7 @@ def df_clean_create(df):
     # Sauvegarde les means
 
         # Créer le dossier s'il n'existe pas
-    save_dir = Path('save_pkl')
+    save_dir = Path('save_pkl/mean_pkl')
     save_dir.mkdir(parents=True, exist_ok=True)
 
         # Sauvegarder chaque dictionnaire dans un fichier différent
@@ -105,14 +108,19 @@ def df_clean_create(df):
 
     # Keeping the only two valid state
     df_final = df_filtered[df_filtered['state'].isin(['failed', 'successful'])]
-    
+
     return df_final
+
+
 
 
 ###---------------Preprocessing for the commenst---------------###
 
 # Fonction finale
 def preprocess(df):
+    '''
+    Fonction finale regroupant les differentes fonctions de preprocessing
+    '''
 
     print('Application du cleaning...')
     df['comments_clean'] = df['comments'].apply(preprocess_cleaning)
@@ -126,10 +134,11 @@ def preprocess(df):
 
     return df[['comments_processed', 'state_encoded']]
 
-# Cleaning
 
 def preprocess_cleaning(sentence):
-
+    '''
+        Cleaning the text and doing the Basics
+    '''
     if pd.isna(sentence):
         return ""
 
@@ -148,9 +157,12 @@ def preprocess_cleaning(sentence):
 
     return sentence
 
-# Lemmatisation (optionnel, souvent TF-IDF suffit)
 
 def preprocess_nltk(text):
+    '''
+        Lemmatisation (optionnel, souvent TF-IDF suffit)
+    '''
+
     lemmatizer = WordNetLemmatizer()
 
     if not text:

@@ -5,15 +5,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from datetime import datetime
+
+import os
+import joblib
 
 # Machine Learning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 import string
 import re
-import nltk
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
@@ -29,13 +30,12 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from xgboost import XGBClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import RandomizedSearchCV
-import joblib
 
 
 ###---------------Functions---------------###
 
 
-def model_creation(df) :
+def model_baselines(df) :
 
     X = df['comments_processed']
     y = df['state_encoded']
@@ -186,8 +186,21 @@ def model_training_saving(df) :
     search_acc.fit(X_train, y_train)
     print("Meilleurs paramètres :", search_acc.best_params_)
 
+    # Saving the model
+
+    now = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # Dossier de save
+    save_dir = "save_pkl/model_pkl/"
+    os.makedirs(save_dir, exist_ok=True)  # Crée le dossier s’il n’existe pas
+
+    # Nom du fichier
+    filename = f'kickstarter_model_{now}.pkl'
+
+    # Chemin complet
+    full_path = os.path.join(save_dir, filename)
     best_model = search_acc.best_estimator_
-    joblib.dump(best_model, 'kickstarter_model.pkl')
+    joblib.dump(best_model, full_path)
     print('Model saved !')
 
     #
