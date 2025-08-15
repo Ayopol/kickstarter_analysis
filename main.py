@@ -14,7 +14,7 @@ def main():
     model_training_saving(df_clean)
 
     user_input = {}
-    my_dict = predict_project_success(user_input: dict):
+    my_dict = predict_project_success(user_input)
 
     result = predict_project_success(my_dict)
     print(f"{result['prediction']} (Confiance : {result['probability']}%)")
