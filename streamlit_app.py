@@ -1,5 +1,6 @@
 import streamlit as st
 from scripts.predict import predict_project_success
+from scripts.scrap import scrape_kickstarter_metadata
 # from scripts.scraping import scrape_project  # en attente de fonction py bruno
 
 st.title("🚀 Kickstarter Project Success Predictor")
@@ -16,7 +17,7 @@ with tab1:
     if st.button("Prédire depuis l'URL", key="predict_from_url"):
         if url.strip():
             try:
-                data_dict = scrape_project(url)  # Doit retourner un dict formaté
+                data_dict = scrape_kickstarter_metadata(url)  # Doit retourner un dict formaté
                 prediction = predict_project_success(data_dict)
                 st.success(f"Résultat : **{prediction}**")
             except Exception as e:
@@ -34,7 +35,7 @@ with tab2:
         "Film & Video", "Food", "Games", "Journalism", "Music",
         "Photography", "Publishing", "Technology", "Theater"
     ])
-    currency = st.selectbox("Devise utilisée", ["USD", "GBP", "CAD", "EUR", "AUD"])
+
     deadline = st.date_input("Date de fin du projet")
     launched = st.date_input("Date de lancement du projet")
     country = st.selectbox("Pays", ["US", "GB", "CA", "DE", "FR", "AU", "NL", "SE", "IT", "ES"])
@@ -45,7 +46,6 @@ with tab2:
         user_input = {
             "name": name,
             "main_category": main_category,
-            "currency": currency,
             "deadline": deadline.strftime("%d/%m/%Y"),
             "launched": launched.strftime("%d/%m/%Y"),
             "country": country,
