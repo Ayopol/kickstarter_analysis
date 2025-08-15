@@ -125,6 +125,19 @@ def scrape_kickstarter_metadata(url):
         goal_amount = _parse_amount(m_goal.group(2)) if m_goal else None
         usd_goal_real = goal_amount
 
+        # --- Fallback DOM (page entière) pour le goal ---
+        if usd_goal_real is None:
+            full_text_goal = driver.execute_script("return document.body ? document.body.innerText : ''") or ""
+            full_text_goal = full_text_goal.replace("\u00A0"," ").replace("\u202f"," ")
+            full_text_goal = re.sub(r"\s+"," ", full_text_goal)
+            m_goal2 = (
+                re.search(r"\$\s*([\d\s.,]+)\s*goal\b", full_text_goal, flags=re.I) or
+                re.search(r"\bgoal\b[^$€¥£]*\$\s*([\d\s.,]+)", full_text_goal, flags=re.I) or
+                re.search(r"\bobjectif\b[^$€¥£]*\$\s*([\d\s.,]+)", full_text_goal, flags=re.I)
+            )
+            if m_goal2:
+                usd_goal_real = _parse_amount(m_goal2.group(1))
+
         # PLEDGED d’abord via le header (UI en $)
         usd_pledged_real = None
         m_pledged = re.search(r"\$[\s]*([\d\s.,]+)\s*pledged\b", header_text, flags=re.I)
@@ -156,7 +169,7 @@ def scrape_kickstarter_metadata(url):
         try: driver.quit()
         except: pass
 
-    # LAUNCH DATE + PLEDGED fallback via /stats.json
+    # LAUNCH DATE + PLEDGED + GOAL fallback via /stats.json
     base = _base_url(url)
     s = requests.Session()
     s.headers.update({
@@ -172,23 +185,39 @@ def scrape_kickstarter_metadata(url):
                 or sj.get("project")
                 or (sj if isinstance(sj, dict) else {}))
 
-        # Si le DOM n’a rien donné en USD, tente champs USD côté API, sinon convertis
+        # PLEDGED en USD (API) si DOM n'a pas donné
         if usd_pledged_real is None:
-            # 1) champs déjà en USD si dispo
             val_usd_direct = proj.get("usd_pledged") or proj.get("usd_pledged_real")
             if val_usd_direct is not None:
                 try:
                     usd_pledged_real = round(float(val_usd_direct), 2)
                 except Exception:
                     usd_pledged_real = _parse_amount(str(val_usd_direct))
-
         if usd_pledged_real is None:
-            # 2) pledged * taux si dispo
             pledged_val = proj.get("pledged")
             fx_rate = proj.get("fx_rate") or proj.get("static_usd_rate") or proj.get("usd_rate")
             try:
                 if pledged_val is not None and fx_rate:
                     usd_pledged_real = round(float(pledged_val) * float(fx_rate), 2)
+            except Exception:
+                pass
+
+        # --- GOAL via API : champs USD direct, sinon conversion ---
+        if usd_goal_real is None:
+            val_goal_usd = proj.get("usd_goal") or proj.get("usd_goal_real")
+            if val_goal_usd is not None:
+                try:
+                    usd_goal_real = round(float(val_goal_usd), 2)
+                except Exception:
+                    usd_goal_real = _parse_amount(str(val_goal_usd))
+        if usd_goal_real is None:
+            goal_local = proj.get("goal")
+            usd_rate = proj.get("fx_rate") or proj.get("static_usd_rate") or proj.get("usd_rate")
+            try:
+                if goal_local is not None and usd_rate:
+                    usd_goal_real = round(float(goal_local) * float(usd_rate), 2)
+                elif goal_local is not None:
+                    usd_goal_real = round(float(goal_local), 2)  # dernier recours (devise locale)
             except Exception:
                 pass
 
@@ -207,12 +236,12 @@ def scrape_kickstarter_metadata(url):
         "country": location_text,                # ex: 'Japan'
         "usd_goal_real": usd_goal_real,          # ex: 2031.0
         "usd_pledged_real": usd_pledged_real,    # -> devrait refléter l’affichage en $
-        "deadline": datetime.utcfromtimestamp(deadline_unix).strftime('%d-%m-%Y'),
-        "launched": datetime.utcfromtimestamp(launch_unix_utc).strftime('%d-%m-%Y')
+        "deadline": (
+            datetime.utcfromtimestamp(deadline_unix).strftime('%d-%m-%Y')
+             if deadline_unix is not None else None),
+        "launched": (
+            datetime.utcfromtimestamp(launch_unix_utc).strftime('%d-%m-%Y')
+            if launch_unix_utc is not None else None),
     }
 
     return dico_du_cul
-
-# # --------- exemple ----------
-# data = scrape_kickstarter_metadata("https://www.kickstarter.com/projects/696521197/cerafilter-revolutionizing-coffee-with-arita-ceramic-tech")
-# print(json.dumps(data, indent=2))
