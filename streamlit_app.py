@@ -1,7 +1,6 @@
 import streamlit as st
 from scripts.predict import predict_project_success
 
-
 st.title("Kickstarter Project Success Predictor")
 
 st.markdown("Remplis les informations de ton projet Kickstarter pour obtenir une prédiction.")

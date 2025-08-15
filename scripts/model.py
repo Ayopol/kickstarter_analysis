@@ -182,7 +182,6 @@ def model_training_saving(df) :
     xgb_pipeline, param_dist,
     n_iter=10, cv=5, scoring='accuracy', n_jobs=-1, random_state=42)
 
-    # not sure of the following actions
     search_acc.fit(X_train, y_train)
     print("Meilleurs paramètres :", search_acc.best_params_)
 

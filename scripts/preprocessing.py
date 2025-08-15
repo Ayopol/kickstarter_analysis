@@ -62,8 +62,8 @@ def df_clean_create(df):
 
     # Keeping only the variables of interest
 
-    filter = ['ID', 'name', 'main_category', 'currency', 'deadline', 'launched', 'state', 'country',
-          'usd_pledged_real', 'usd_goal_real']
+    filter = ['ID', 'name', 'main_category', 'deadline', 'launched', 'country',
+          'usd_pledged_real', 'usd_goal_real', 'state']
 
     df_filtered = df[filter]
 
