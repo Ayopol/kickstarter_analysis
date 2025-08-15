@@ -245,3 +245,5 @@ def scrape_kickstarter_metadata(url):
 # --------- exemple ----------
 data = scrape_kickstarter_metadata("https://www.kickstarter.com/projects/696521197/cerafilter-revolutionizing-coffee-with-arita-ceramic-tech")
 print(json.dumps(data, indent=2))
+
+#caca
