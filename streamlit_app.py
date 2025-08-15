@@ -19,8 +19,8 @@ with tab1:
         "Photography", "Publishing", "Technology", "Theater"
     ])
     currency = st.selectbox("Devise utilisée", ["USD", "GBP", "CAD", "EUR", "AUD"])
-    deadline = st.date_input("Date de fin du projet")
     launched = st.date_input("Date de lancement du projet")
+    deadline = st.date_input("Date de fin du projet")
     country = st.selectbox("Pays", ["US", "GB", "CA", "DE", "FR", "AU", "NL", "SE", "IT", "ES"])
     usd_pledged_real = st.number_input("Montant déjà récolté (USD)", min_value=0.0)
     usd_goal_real = st.number_input("Objectif total (USD)", min_value=1.0)
@@ -30,8 +30,8 @@ with tab1:
             "name": name,
             "main_category": main_category,
             "currency": currency,
-            "deadline": deadline.strftime("%d/%m/%Y"),
             "launched": launched.strftime("%d/%m/%Y"),
+            "deadline": deadline.strftime("%d/%m/%Y"),
             "country": country,
             "usd_pledged_real": usd_pledged_real,
             "usd_goal_real": usd_goal_real
