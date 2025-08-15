@@ -13,8 +13,8 @@ def predict_project_success(user_input: dict):
     """
     # Goal deja atteint -- Succès garanti
     if user_input['usd_pledged_real'] >= user_input['usd_goal_real']:
-        return print("✅ Le projet est deja un succès ! 🚀")
-
+        prediction_text =  "✅ Le projet est déjà financé à 100%, succès garanti 🎯"
+        return prediction_text
     # === 1. Charger les objets nécessaires ===
 
     model = joblib.load("save_pkl/model_pkl/kickstarter_model.pkl")
