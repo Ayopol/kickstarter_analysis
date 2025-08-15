@@ -5,8 +5,6 @@ import numpy as np
 import math
 
 
-
-
 def predict_project_success(user_input: dict):
     """
     Prend en entrée un dictionnaire avec les infos du projet Kickstarter et renvoie la prédiction.
