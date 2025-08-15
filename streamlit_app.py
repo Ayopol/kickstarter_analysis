@@ -33,7 +33,6 @@ with tab1:
             "launched": launched.strftime("%d/%m/%Y"),
             "deadline": deadline.strftime("%d/%m/%Y"),
             "country": country,
-            "usd_pledged_real": usd_pledged_real,
             "usd_goal_real": usd_goal_real
         }
         prediction = predict_project_success(user_input)
