@@ -1,4 +1,4 @@
-# 🎯 Kickstarter Analysis
+# 🎯 Kickstarter Success Analysis with Machine Learning
 
 **Kickstarter Analysis** is a project aimed at **predicting the success** of crowdfunding campaigns using:  
 - **Machine Learning**  
