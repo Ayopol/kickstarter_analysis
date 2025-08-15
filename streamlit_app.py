@@ -22,7 +22,6 @@ with tab1:
     launched = st.date_input("Date de lancement du projet")
     deadline = st.date_input("Date de fin du projet")
     country = st.selectbox("Pays", ["US", "GB", "CA", "DE", "FR", "AU", "NL", "SE", "IT", "ES"])
-    usd_pledged_real = st.number_input("Montant déjà récolté (USD)", min_value=0.0)
     usd_goal_real = st.number_input("Objectif total (USD)", min_value=1.0)
 
     if st.button("Prédire depuis formulaire", key="predict_from_form"):
