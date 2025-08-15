@@ -13,11 +13,11 @@ def predict_project_success(user_input: dict):
     """
     # Goal deja atteint -- Succès garanti
     if user_input['usd_pledged_real'] >= user_input['usd_goal_real']:
-        return 1
+        return print("✅ Le projet est deja un succès ! 🚀")
 
     # === 1. Charger les objets nécessaires ===
 
-    model = joblib.load("save_pkl/model_pkl/kickstarter_model_20250810_124305.pkl")
+    model = joblib.load("save_pkl/model_pkl/kickstarter_model.pkl")
     mean_goal_by_cat = joblib.load("save_pkl/mean_pkl/mean_goal_by_cat.pkl")
     mean_goal_by_country = joblib.load("save_pkl/mean_pkl/mean_goal_by_country.pkl")
 
@@ -25,11 +25,19 @@ def predict_project_success(user_input: dict):
     # === 2. Construire le DataFrame utilisateur ===
     X = pd.DataFrame([user_input])
 
+        # Conversion des dates au format day/month/year
+    try:
+        X['deadline'] = pd.to_datetime(X['deadline'], dayfirst=True, errors='raise')
+        X['launched'] = pd.to_datetime(X['launched'], dayfirst=True, errors='raise')
+    except Exception as e:
+        raise ValueError(f"Erreur dans le format de date. Format attendu : JJ/MM/AAAA.")
+
+      # Vérification : launched <= deadline
+    if (X['launched'] > X['deadline']).any():
+        raise ValueError("Erreur : La date 'launched' ne peut pas être postérieure à 'deadline'.")
+
     # === Clean les features ===
-    X['deadline'] = pd.to_datetime(X['deadline'], dayfirst=True)
-    X['launched'] = pd.to_datetime(X['launched'], dayfirst=True)
-    X['delta_time'] = X['deadline'] - X['launched']
-    X['delta_time'] = X['delta_time'].dt.days
+    X['delta_time'] = (X['deadline'] - X['launched']).dt.days
     X['practicability'] = X['usd_goal_real'] / X['delta_time']
     X['title_word_count'] = X['name'].str.split().str.len()
 
