@@ -1,11 +1,11 @@
 import re, json, requests
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
-
 
 MONTHS = {
     "jan":1,"january":1, "feb":2,"february":2, "mar":3,"march":3, "apr":4,"april":4,
@@ -20,26 +20,6 @@ CATS = [
     "Fashion","Theater","Comics","Photography","Crafts","Journalism","Dance"
 ]
 
-DEFAULT_CONVERSION_TO_USD = {
-    "USD": 1.0,
-    "GBP": 1.28,   # 1 GBP = 1.28 USD
-    "EUR": 1.09,   # 1 EUR = 1.09 USD
-    "CAD": 0.74,   # 1 CAD = 0.74 USD
-    "AUD": 0.67,   # 1 AUD = 0.67 USD
-    "SEK": 0.094,  # 1 SEK = 0.094 USD
-    "MXN": 0.058,  # 1 MXN = 0.058 USD
-    "NZD": 0.61,   # 1 NZD = 0.61 USD
-    "DKK": 0.15,   # 1 DKK = 0.15 USD
-    "CHF": 1.14,   # 1 CHF = 1.14 USD
-    "NOK": 0.094,  # 1 NOK = 0.094 USD
-    "HKD": 0.13,   # 1 HKD = 0.13 USD
-    "SGD": 0.74,   # 1 SGD = 0.74 USD
-    "JPY": 0.0069, # 1 JPY = 0.0069 USD
-}
-
-
-
-#Transforme la string extraite en montant d'argent
 def _parse_amount(s):
     if not s: return None
     s = (s.replace("\u202f"," ").replace("\xa0"," ").replace("’","").replace("'","")
@@ -47,11 +27,8 @@ def _parse_amount(s):
     try: return float(re.sub(r"[^0-9.]", "", s))
     except: return None
 
-
-#Convertit la string date en ISO et Unix
 def _parse_deadline(text):
     if not text: return None, None
-    # ex: "Sun, Aug 31 2025 2:32 PM CEST" ou "Sun, August 31 2025 2:32 PM CEST"
     m = re.search(
         r"([A-Za-z]{3,9})\s+(\d{1,2})(?:,)?\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?\s*([A-Z]{2,4})",
         text, re.I
@@ -71,25 +48,14 @@ def _parse_deadline(text):
     dt_utc = dt_utc.replace(tzinfo=timezone.utc)
     return dt_utc.isoformat(), int(dt_utc.timestamp())
 
-
-#Nettoie une url kickstarter pour obtenir : protocole - domaine - chemin
 def _base_url(url: str) -> str:
-    # urlsplit découpe l'url en morceaux ((scheme='https', netloc='www.kickstarter.com', path='/projects/696521197/cerafilter',
-    # query='ref=section-homepage', fragment=''))
     parts = list(urlsplit(url))
-    parts[3] = ""  # drop query (on supprime les parametres (?ref=...))
+    parts[3] = ""      # drop query
     parts[2] = parts[2].rstrip("/")
     return urlunsplit(parts)
 
-
-
-####       ___MAIN___        ####
-
-'''Recupère en scraping toutes les infos nécessaire au modèle à partir d'une url'''
-
 def scrape_kickstarter_metadata(url):
-    # CONFIGURE ET LANCE CHROME EN MODE HEADLESS
-    # # On force l’anglais pour être raccord avec notre Df d'entrainement
+    # Chrome headless (langue forcée en EN, devise UI en $ via ton paramétrage sur le site)
     opts = Options()
     opts.add_experimental_option("prefs", {"intl.accept_languages": "en-US,en"})
     opts.add_argument("--lang=en-US")
@@ -103,32 +69,29 @@ def scrape_kickstarter_metadata(url):
     wait = WebDriverWait(driver, 10)
 
     try:
-        # Ouvre la page et attend son chargement complet
+        # Ouvre la page
         driver.get(url)
         wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
 
-        # Récupère header text = source pour parser cat/location/goal
+        # Header text pour cat / location / goal / pledged
         header_text = driver.execute_script("""
           const head = document.querySelector("[data-test-id='hero__stats']") ||
                         document.querySelector("[data-test-id='hero__content']") ||
                         document.querySelector("main") || document.body;
           return (head.innerText || "").trim();
         """) or ""
-        # Normalise les espaces pour des Regex opti
         header_text = header_text.replace("\u00A0"," ").replace("\u202f"," ")
         header_text = re.sub(r"\s+"," ", header_text)
 
-        #Récupérer TITLE
+        # TITLE
         title = driver.execute_script("""
-        const m = document.querySelector("meta[property='og:title']");
-        return m ? m.getAttribute("content") : null;
+          const m = document.querySelector("meta[property='og:title']");
+          return m ? m.getAttribute("content") : null;
         """)
         if not title:
-            # fallback: titre de l’onglet (souvent "Nom du projet — Kickstarter")
             title = driver.title.replace(" — Kickstarter", "").strip()
 
-        # Récupérer MAIN_CATEGORY (exacte parmi CATS)
-        # breadcrumb = chemin de navigation rapide vers un élément d'une page : On tente de récupérer la categorie via lui
+        # MAIN_CATEGORY
         cat_text = driver.execute_script("""
           const el = document.querySelector("nav[aria-label='breadcrumb'] a[href*='/categories/']");
           return el ? (el.textContent || "").trim() : null;
@@ -138,8 +101,6 @@ def scrape_kickstarter_metadata(url):
             for c in CATS:
                 if cat_text.strip().lower() == c.lower():
                     main_category = c; break
-
-        # Si la recherche via le breadcrumb n'a pas marché on cherche la premiere occurence d'un des CATS
         if not main_category:
             hits = []
             for c in CATS:
@@ -147,53 +108,44 @@ def scrape_kickstarter_metadata(url):
                 if m: hits.append((m.start(), c))
             main_category = min(hits)[1] if hits else None
 
-
-        # Récupérer LOCATION COUNTRY depuis l'en-tête
+        # COUNTRY (uniquement le pays)
         lines = [l.strip() for l in (driver.execute_script("""
           const head = document.querySelector("[data-test-id='hero__stats']") ||
                       document.querySelector("[data-test-id='hero__content']") ||
                       document.querySelector("main") || document.body;
           return (head.innerText || "").trim();
         """) or "").split("\n") if l.strip()]
-        location_text = next((l.split(",")[-1].strip() for l in lines if "," in l),None)
+        location_text = next((l.split(",")[-1].strip() for l in lines if "," in l), None)
 
-        # Récupérer GOAL : format "of $ 2,031 goal", ou sinon "Goal $ 2,031"
+        # GOAL (on suppose USD déjà affiché)
         m_goal = re.search(r"of\s*([$€¥£])\s*([\d\s.,]+)\s*goal", header_text, flags=re.I)
         if not m_goal:
             m_goal = re.search(r"\bGoal\b[^$€¥£]*([$€¥£])\s*([\d\s.,]+)", header_text, flags=re.I)
         currency_symbol = m_goal.group(1) if m_goal else None
         goal_amount = _parse_amount(m_goal.group(2)) if m_goal else None
-        currency_guess = {"$":"USD","€":"EUR","¥":"JPY","£":"GBP"}.get(currency_symbol)
+        usd_goal_real = goal_amount
 
-        # Récupérer PLEDGED (montant engagé) et convertir en USD
-        m_pledged = re.search(r"\b([$€¥£])\s*([\d\s.,]+)\s*pledged\b", header_text, flags=re.I)
-        if not m_pledged:
-            m_pledged = re.search(r"\b([\d\s.,]+)\s*([$€¥£])\s*pledged\b", header_text, flags=re.I)
-        if not m_pledged:
-            # fallback FR : "... engagés ..."
-            m_pledged = (re.search(r"\b([$€¥£])\s*([\d\s.,]+)\s*engag", header_text, flags=re.I)
-                         or re.search(r"\b([\d\s.,]+)\s*([$€¥£])\s*engag", header_text, flags=re.I))
-
-        pledged_currency_symbol = None
-        pledged_amount = None
-        if m_pledged:
-            g1, g2 = m_pledged.group(1), m_pledged.group(2)
-            if g1 in "$€¥£":
-                pledged_currency_symbol = g1
-                pledged_amount = _parse_amount(g2)
-            else:
-                pledged_currency_symbol = g2 if g2 in "$€¥£" else None
-                pledged_amount = _parse_amount(g1)
-
-        pledged_currency_guess = {"$":"USD","€":"EUR","¥":"JPY","£":"GBP"}.get(pledged_currency_symbol)
+        # PLEDGED d’abord via le header (UI en $)
         usd_pledged_real = None
-        if pledged_amount is not None:
-            rate = DEFAULT_CONVERSION_TO_USD.get(pledged_currency_guess or "USD", 1.0)
-            usd_pledged_real = round(pledged_amount * rate, 2)
+        m_pledged = re.search(r"\$[\s]*([\d\s.,]+)\s*pledged\b", header_text, flags=re.I)
+        if not m_pledged:
+            # FR (au cas où)
+            m_pledged = re.search(r"([\d\s.,]+)\s*\$\s*engag", header_text, flags=re.I)
+        if m_pledged:
+            usd_pledged_real = _parse_amount(m_pledged.group(1))
 
+        # Si toujours pas trouvé, chercher dans TOUTE la page (parfois l’info est ailleurs)
+        if usd_pledged_real is None:
+            full_text = driver.execute_script("return document.body ? document.body.innerText : ''") or ""
+            full_text = full_text.replace("\u00A0"," ").replace("\u202f"," ")
+            full_text = re.sub(r"\s+"," ", full_text)
+            m2 = re.search(r"\$[\s]*([\d\s.,]+)\s*pledged\b", full_text, flags=re.I)
+            if not m2:
+                m2 = re.search(r"([\d\s.,]+)\s*\$\s*engag", full_text, flags=re.I)
+            if m2:
+                usd_pledged_real = _parse_amount(m2.group(1))
 
-        # Récupérer DEADLINE (Iso et Unix)
-        # On scrap la phrase complete qui parle de la deadline et on récupère juste les valeurs avec parse_deadline()
+        # DEADLINE
         deadline_text = driver.execute_script("""
           const el = document.querySelector("[data-test-id='deadline-exists']");
           return el ? (el.textContent||"").trim() : null;
@@ -204,9 +156,7 @@ def scrape_kickstarter_metadata(url):
         try: driver.quit()
         except: pass
 
-
-    # Récupérer LAUNCH_DATE
-    # Plus technique car pas sur l'URL de base du projet
+    # LAUNCH DATE + PLEDGED fallback via /stats.json
     base = _base_url(url)
     s = requests.Session()
     s.headers.update({
@@ -221,8 +171,29 @@ def scrape_kickstarter_metadata(url):
         proj = (sj.get("data", {}).get("project")
                 or sj.get("project")
                 or (sj if isinstance(sj, dict) else {}))
+
+        # Si le DOM n’a rien donné en USD, tente champs USD côté API, sinon convertis
+        if usd_pledged_real is None:
+            # 1) champs déjà en USD si dispo
+            val_usd_direct = proj.get("usd_pledged") or proj.get("usd_pledged_real")
+            if val_usd_direct is not None:
+                try:
+                    usd_pledged_real = round(float(val_usd_direct), 2)
+                except Exception:
+                    usd_pledged_real = _parse_amount(str(val_usd_direct))
+
+        if usd_pledged_real is None:
+            # 2) pledged * taux si dispo
+            pledged_val = proj.get("pledged")
+            fx_rate = proj.get("fx_rate") or proj.get("static_usd_rate") or proj.get("usd_rate")
+            try:
+                if pledged_val is not None and fx_rate:
+                    usd_pledged_real = round(float(pledged_val) * float(fx_rate), 2)
+            except Exception:
+                pass
+
+        # Launch date
         state = proj.get("state")
-        # si dispo, launched_at direct ; sinon, si live, state_changed_at ≈ passage en live
         launched_ts = proj.get("launched_at") or (proj.get("state_changed_at") if state == "live" else None)
         if launched_ts:
             launch_unix_utc = int(launched_ts)
@@ -231,19 +202,17 @@ def scrape_kickstarter_metadata(url):
         pass
 
     dico_du_cul = {
-        "title" : title,
-        "main_category": main_category,               # ex: 'Crafts'
-        "country": location_text,               # ex: 'Saga, Japan'
-        "usd_goal_real": goal_amount,                   # ex: 2031.0
-        "usd_pledged_real": usd_pledged_real,
+        "title": title,
+        "main_category": main_category,          # ex: 'Crafts'
+        "country": location_text,                # ex: 'Japan'
+        "usd_goal_real": usd_goal_real,          # ex: 2031.0
+        "usd_pledged_real": usd_pledged_real,    # -> devrait refléter l’affichage en $
         "deadline": datetime.utcfromtimestamp(deadline_unix).strftime('%d-%m-%Y'),
         "launched": datetime.utcfromtimestamp(launch_unix_utc).strftime('%d-%m-%Y')
     }
 
     return dico_du_cul
 
-# --------- exemple ----------
-data = scrape_kickstarter_metadata("https://www.kickstarter.com/projects/696521197/cerafilter-revolutionizing-coffee-with-arita-ceramic-tech")
-print(json.dumps(data, indent=2))
-
-#caca
+# # --------- exemple ----------
+# data = scrape_kickstarter_metadata("https://www.kickstarter.com/projects/696521197/cerafilter-revolutionizing-coffee-with-arita-ceramic-tech")
+# print(json.dumps(data, indent=2))
