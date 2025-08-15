@@ -1,6 +1,9 @@
 import sys
 import joblib
 import pandas as pd
+import numpy as np
+import math
+
 
 
 
@@ -8,10 +11,13 @@ def predict_project_success(user_input: dict):
     """
     Prend en entrée un dictionnaire avec les infos du projet Kickstarter et renvoie la prédiction.
     """
+    # Goal deja atteint -- Succès garanti
+    if user_input['usd_pledged_real'] >= user_input['usd_goal_real']:
+        return 1
 
     # === 1. Charger les objets nécessaires ===
 
-    model = joblib.load("save_pkl/model_pkl/kickstarter_model.pkl")
+    model = joblib.load("save_pkl/model_pkl/kickstarter_model_20250810_124305.pkl")
     mean_goal_by_cat = joblib.load("save_pkl/mean_pkl/mean_goal_by_cat.pkl")
     mean_goal_by_country = joblib.load("save_pkl/mean_pkl/mean_goal_by_country.pkl")
 
@@ -36,30 +42,31 @@ def predict_project_success(user_input: dict):
         lambda row: row['usd_goal_real'] / mean_goal_by_country.get(row['country'], 1),
         axis=1)
 
-    print(X.keys())
-            # === 3.bis. Transformer les colonnes texte ===
-            # df['comments_cleaned'] = df['comments'].apply(preprocess_text)  # À définir si pas encore fait
+    # === 3.bis. Transformer les colonnes texte ===
+    # df['comments_cleaned'] = df['comments'].apply(preprocess_text)  # À définir si pas encore fait
 
-            # X_text = vectorizer.transform(df['comments_cleaned'])
+    # X_text = vectorizer.transform(df['comments_cleaned'])
 
 
-            # Tu dois les encoder comme dans ton entraînement (OneHotEncoder ou OrdinalEncoder)
-            # Ici, on suppose que tu as tout préparé avant pour les features finales
-            # Exemple :
-            # X_final = hstack([X_text, encoded_features])
+    # Tu dois les encoder comme dans ton entraînement (OneHotEncoder ou OrdinalEncoder)
+    # Ici, on suppose que tu as tout préparé avant pour les features finales
+    # Exemple :
+    # X_final = hstack([X_text, encoded_features])
 
-            # Si ton modèle ne prend que le texte :
-            # X_final = X_text
+    # Si ton modèle ne prend que le texte :
+    # X_final = X_text
 
     # === 4. Prédiction ===
-    prediction = model.predict(X)[0]
-    proba = model.predict_proba(X)[0]
 
-    return {
-        "prediction": prediction,
-        "probability": proba
-    }
+    proba_success = model.predict_proba(X)[0][1]  # colonne 1 = succès
+    proba_percent = round(proba_success * 100, 2)
 
+    if proba_success >= 0.5:
+        prediction_text = f"✅ Le modèle prédit que le projet sera un succès 🚀 (probabilité : {proba_percent:.2f}%)"
+    else:
+        prediction_text = f"❌ Le modèle prédit que le projet échouera 💡 (probabilité : {100-proba_percent:.2f}%)"
+
+    return prediction_text
 
 
 

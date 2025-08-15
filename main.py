@@ -13,7 +13,11 @@ def main():
     df_clean = df_clean_create(df)
     model_training_saving(df_clean)
 
-    # predict_project_success(user_input: dict):
+    user_input = {}
+    my_dict = predict_project_success(user_input: dict):
+
+    result = predict_project_success(my_dict)
+    print(f"{result['prediction']} (Confiance : {result['probability']}%)")
 
 
     # A voir
