@@ -1,9 +1,12 @@
-# scrap.py
-import re, json, requests, html
+import re, json, requests
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
-# ---------- constants ----------
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+
 MONTHS = {
     "jan":1,"january":1, "feb":2,"february":2, "mar":3,"march":3, "apr":4,"april":4,
     "may":5, "jun":6,"june":6, "jul":7,"july":7, "aug":8,"august":8,
@@ -17,7 +20,6 @@ CATS = [
     "Fashion","Theater","Comics","Photography","Crafts","Journalism","Dance"
 ]
 
-# ---------- helpers ----------
 def _parse_amount(s):
     if not s: return None
     s = (s.replace("\u202f"," ").replace("\xa0"," ").replace("’","").replace("'","")
@@ -52,431 +54,195 @@ def _base_url(url: str) -> str:
     parts[2] = parts[2].rstrip("/")
     return urlunsplit(parts)
 
-def _deep_find_first(obj, want_keys):
-    seen = set(); stack = [obj]; want = {k.lower() for k in want_keys}
-    while stack:
-        cur = stack.pop()
-        if id(cur) in seen: continue
-        seen.add(id(cur))
-        if isinstance(cur, dict):
-            for k, v in cur.items():
-                if str(k).lower() in want: return k, v
-            for v in cur.values(): stack.append(v)
-        elif isinstance(cur, list):
-            for v in cur: stack.append(v)
-    return None, None
+def scrape_kickstarter_metadata(url):
+    # Chrome headless (langue forcée en EN, devise UI en $ via ton paramétrage sur le site)
+    opts = Options()
+    opts.add_experimental_option("prefs", {"intl.accept_languages": "en-US,en"})
+    opts.add_argument("--lang=en-US")
+    opts.add_argument("--headless=new")
+    opts.add_argument("--window-size=1366,768")
+    opts.add_argument("--disable-dev-shm-usage"); opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
 
-def _coerce_float(x):
-    if x is None: return None
-    try: return float(x)
-    except Exception:
-        try: return float(re.sub(r"[^0-9.\-]", "", str(x)))
-        except Exception: return None
+    driver = webdriver.Chrome(options=opts)
+    wait = WebDriverWait(driver, 10)
 
-def _deep_get(d, keys):
-    if not isinstance(d, dict): return None
-    for k in keys:
-        if k in d and d[k] is not None: return d[k]
-    return None
+    try:
+        # Ouvre la page
+        driver.get(url)
+        wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
 
-def _extract_usd_goal_usd(proj: dict, next_json: dict | None) -> float | None:
-    if not isinstance(proj, dict): proj = {}
-    # direct USD
-    for key in ["usd_goal", "usd_goal_real", "goal_usd", "goal_usd_real", "converted_goal_usd"]:
-        v = _coerce_float(proj.get(key))
-        if v and v > 0: return round(v, 2)
-    # cents
-    for key in ["usd_goal_cents", "goal_usd_cents"]:
-        v = _coerce_float(proj.get(key))
-        if v and v > 0: return round(v/100.0, 2)
-    # goal * rate
-    goal_local = _coerce_float(_deep_get(proj, ["goal", "goal_local"]))
-    if goal_local and goal_local > 0:
-        rate = _coerce_float(_deep_get(proj, ["fx_rate", "static_usd_rate", "usd_rate", "fx_rate_static"]))
-        if rate and rate > 0: return round(goal_local * rate, 2)
-    # __NEXT_DATA__
-    if next_json and isinstance(next_json, dict):
-        _, g = _deep_find_first(next_json, {"usdGoal","usd_goal","usd_goal_real","goal_usd","goal"})
-        g = _coerce_float(g)
-        if g and g > 0: return round(g, 2)
-        _, r = _deep_find_first(next_json, {"fx_rate","usd_rate","static_usd_rate","fxRate","usdRate","staticUsdRate"})
-        r = _coerce_float(r)
-        if g and g > 0 and r and r > 0: return round(g * r, 2)
-        _, g2 = _deep_find_first(next_json, {"goal","goal_local"})
-        g2 = _coerce_float(g2)
-        if g2 and g2 > 0 and r and r > 0: return round(g2 * r, 2)
-    return None
+        # Header text pour cat / location / goal / pledged
+        header_text = driver.execute_script("""
+          const head = document.querySelector("[data-test-id='hero__stats']") ||
+                        document.querySelector("[data-test-id='hero__content']") ||
+                        document.querySelector("main") || document.body;
+          return (head.innerText || "").trim();
+        """) or ""
+        header_text = header_text.replace("\u00A0"," ").replace("\u202f"," ")
+        header_text = re.sub(r"\s+"," ", header_text)
 
-# ---------- Selenium driver (Firefox headless conseillé en cloud) ----------
-def _make_driver():
-    from selenium import webdriver
-    from selenium.webdriver.firefox.options import Options as FirefoxOptions
-    opts = FirefoxOptions()
-    opts.add_argument("--headless")
-    opts.set_preference("intl.accept_languages", "en-US,en")
-    return webdriver.Firefox(options=opts)
+        # TITLE
+        title = driver.execute_script("""
+          const m = document.querySelector("meta[property='og:title']");
+          return m ? m.getAttribute("content") : null;
+        """)
+        if not title:
+            title = driver.title.replace(" — Kickstarter", "").strip()
 
-# ---------- requests client ----------
-def _make_session(base):
+        # MAIN_CATEGORY
+        cat_text = driver.execute_script("""
+          const el = document.querySelector("nav[aria-label='breadcrumb'] a[href*='/categories/']");
+          return el ? (el.textContent || "").trim() : null;
+        """)
+        main_category = None
+        if cat_text:
+            for c in CATS:
+                if cat_text.strip().lower() == c.lower():
+                    main_category = c; break
+        if not main_category:
+            hits = []
+            for c in CATS:
+                m = re.search(rf"\b{re.escape(c)}\b", header_text, flags=re.I)
+                if m: hits.append((m.start(), c))
+            main_category = min(hits)[1] if hits else None
+
+        # COUNTRY (uniquement le pays)
+        lines = [l.strip() for l in (driver.execute_script("""
+          const head = document.querySelector("[data-test-id='hero__stats']") ||
+                      document.querySelector("[data-test-id='hero__content']") ||
+                      document.querySelector("main") || document.body;
+          return (head.innerText || "").trim();
+        """) or "").split("\n") if l.strip()]
+        location_text = next((l.split(",")[-1].strip() for l in lines if "," in l), None)
+
+        # GOAL (on suppose USD déjà affiché)
+        m_goal = re.search(r"of\s*([$€¥£])\s*([\d\s.,]+)\s*goal", header_text, flags=re.I)
+        if not m_goal:
+            m_goal = re.search(r"\bGoal\b[^$€¥£]*([$€¥£])\s*([\d\s.,]+)", header_text, flags=re.I)
+        currency_symbol = m_goal.group(1) if m_goal else None
+        goal_amount = _parse_amount(m_goal.group(2)) if m_goal else None
+        usd_goal_real = goal_amount
+
+        # --- Fallback DOM (page entière) pour le goal ---
+        if usd_goal_real is None:
+            full_text_goal = driver.execute_script("return document.body ? document.body.innerText : ''") or ""
+            full_text_goal = full_text_goal.replace("\u00A0"," ").replace("\u202f"," ")
+            full_text_goal = re.sub(r"\s+"," ", full_text_goal)
+            m_goal2 = (
+                re.search(r"\$\s*([\d\s.,]+)\s*goal\b", full_text_goal, flags=re.I) or
+                re.search(r"\bgoal\b[^$€¥£]*\$\s*([\d\s.,]+)", full_text_goal, flags=re.I) or
+                re.search(r"\bobjectif\b[^$€¥£]*\$\s*([\d\s.,]+)", full_text_goal, flags=re.I)
+            )
+            if m_goal2:
+                usd_goal_real = _parse_amount(m_goal2.group(1))
+
+        # PLEDGED d’abord via le header (UI en $)
+        usd_pledged_real = None
+        m_pledged = re.search(r"\$[\s]*([\d\s.,]+)\s*pledged\b", header_text, flags=re.I)
+        if not m_pledged:
+            # FR (au cas où)
+            m_pledged = re.search(r"([\d\s.,]+)\s*\$\s*engag", header_text, flags=re.I)
+        if m_pledged:
+            usd_pledged_real = _parse_amount(m_pledged.group(1))
+
+        # Si toujours pas trouvé, chercher dans TOUTE la page (parfois l’info est ailleurs)
+        if usd_pledged_real is None:
+            full_text = driver.execute_script("return document.body ? document.body.innerText : ''") or ""
+            full_text = full_text.replace("\u00A0"," ").replace("\u202f"," ")
+            full_text = re.sub(r"\s+"," ", full_text)
+            m2 = re.search(r"\$[\s]*([\d\s.,]+)\s*pledged\b", full_text, flags=re.I)
+            if not m2:
+                m2 = re.search(r"([\d\s.,]+)\s*\$\s*engag", full_text, flags=re.I)
+            if m2:
+                usd_pledged_real = _parse_amount(m2.group(1))
+
+        # DEADLINE
+        deadline_text = driver.execute_script("""
+          const el = document.querySelector("[data-test-id='deadline-exists']");
+          return el ? (el.textContent||"").trim() : null;
+        """)
+        deadline_iso, deadline_unix = _parse_deadline(deadline_text or header_text)
+
+    finally:
+        try: driver.quit()
+        except: pass
+
+    # LAUNCH DATE + PLEDGED + GOAL fallback via /stats.json
+    base = _base_url(url)
     s = requests.Session()
     s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": base,
-        "Connection": "keep-alive",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
     })
-    return s
-
-# ---------- requests-only fallback ----------
-def _requests_fallback(base):
-    s = _make_session(base)
-
-    title = main_category = country_name = None
-    usd_goal_real = usd_pledged_real = None
-    deadline_unix = launched_unix = None
-
-    # HTML + __NEXT_DATA__
-    html_text = ""
+    launch_iso_utc = launch_unix_utc = None
     try:
-        r = s.get(base, timeout=15)
-        if r.status_code == 403:
-            r = s.get(base, timeout=15)  # retry simple
-        r.raise_for_status()
-        html_text = r.text
-    except Exception:
-        pass
+        sj = s.get(base + "/stats.json", timeout=10).json()
+        proj = (sj.get("data", {}).get("project")
+                or sj.get("project")
+                or (sj if isinstance(sj, dict) else {}))
 
-    next_json = None
-    if html_text:
-        m = re.search(r'(?is)<script\s+id=["\']__NEXT_DATA__["\']\s+type=["\']application/json["\']\s*>(.*?)</script>', html_text)
-        if m:
-            try: next_json = json.loads(m.group(1))
-            except Exception: next_json = None
-        mtitle = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\'](.*?)["\']', html_text, re.I|re.S)
-        if mtitle:
-            title = html.unescape(mtitle.group(1)).strip()
-        else:
-            m2 = re.search(r'(?is)<title>(.*?)</title>', html_text)
-            if m2:
-                title = html.unescape(m2.group(1)).replace(" — Kickstarter", "").strip()
-        m_dead = re.search(r'(?is)data-test-id=["\']deadline-exists["\'][^>]*>(.*?)</span>', html_text)
-        if m_dead and not deadline_unix:
-            dtext = html.unescape(re.sub(r'(?is)<[^>]+>', ' ', m_dead.group(1))).strip()
-            _, deadline_unix = _parse_deadline(dtext)
-
-    # /stats.json
-    proj = {}
-    try:
-        rj = s.get(base + "/stats.json", timeout=15)
-        if rj.status_code == 403:
-            rj = s.get(base + "/stats.json", timeout=15)  # retry
-        rj.raise_for_status()
-        sj = rj.json()
-        proj = (sj.get("data", {}).get("project") or sj.get("project") or (sj if isinstance(sj, dict) else {}))
-
-        # pledged
-        val_usd_direct = proj.get("usd_pledged") or proj.get("usd_pledged_real") or proj.get("converted_pledged_amount")
-        if val_usd_direct is not None:
-            try: usd_pledged_real = round(float(val_usd_direct), 2)
-            except Exception: usd_pledged_real = _parse_amount(str(val_usd_direct))
+        # PLEDGED en USD (API) si DOM n'a pas donné
+        if usd_pledged_real is None:
+            val_usd_direct = proj.get("usd_pledged") or proj.get("usd_pledged_real")
+            if val_usd_direct is not None:
+                try:
+                    usd_pledged_real = round(float(val_usd_direct), 2)
+                except Exception:
+                    usd_pledged_real = _parse_amount(str(val_usd_direct))
         if usd_pledged_real is None:
             pledged_val = proj.get("pledged")
             fx_rate = proj.get("fx_rate") or proj.get("static_usd_rate") or proj.get("usd_rate")
             try:
                 if pledged_val is not None and fx_rate:
                     usd_pledged_real = round(float(pledged_val) * float(fx_rate), 2)
-                elif pledged_val is not None:
-                    usd_pledged_real = round(float(pledged_val), 2)
             except Exception:
                 pass
 
-        # goal (robuste)
+        # --- GOAL via API : champs USD direct, sinon conversion ---
         if usd_goal_real is None:
-            usd_goal_real = _extract_usd_goal_usd(proj, next_json)
+            val_goal_usd = proj.get("usd_goal") or proj.get("usd_goal_real")
+            if val_goal_usd is not None:
+                try:
+                    usd_goal_real = round(float(val_goal_usd), 2)
+                except Exception:
+                    usd_goal_real = _parse_amount(str(val_goal_usd))
+        if usd_goal_real is None:
+            goal_local = proj.get("goal")
+            usd_rate = proj.get("fx_rate") or proj.get("static_usd_rate") or proj.get("usd_rate")
+            try:
+                if goal_local is not None and usd_rate:
+                    usd_goal_real = round(float(goal_local) * float(usd_rate), 2)
+                elif goal_local is not None:
+                    usd_goal_real = round(float(goal_local), 2)  # dernier recours (devise locale)
+            except Exception:
+                pass
 
-        # country
-        if not country_name:
-            country_code = (proj.get("country") or proj.get("country_code"))
-            if not country_code:
-                loc = proj.get("location") or {}
-                if isinstance(loc, dict):
-                    country_code = loc.get("country") or loc.get("country_code")
-            if not country_code:
-                creator = proj.get("creator") or {}
-                if isinstance(creator, dict) and isinstance(creator.get("location"), dict):
-                    country_code = creator["location"].get("country")
-            if country_code:
-                ISO2_TO_NAME = {
-                    "US":"United States","GB":"United Kingdom","CA":"Canada","AU":"Australia","NZ":"New Zealand",
-                    "JP":"Japan","DE":"Germany","FR":"France","ES":"Spain","IT":"Italy","NL":"Netherlands",
-                    "SE":"Sweden","NO":"Norway","DK":"Denmark","CH":"Switzerland","HK":"Hong Kong","SG":"Singapore",
-                    "MX":"Mexico","BR":"Brazil","IE":"Ireland","BE":"Belgium","AT":"Austria","KR":"South Korea",
-                    "CN":"China","TW":"Taiwan"
-                }
-                country_name = ISO2_TO_NAME.get(str(country_code).upper(), country_code)
-
-        # category
-        if not main_category:
-            cat_obj = proj.get("category") or {}
-            if isinstance(cat_obj, dict):
-                parent_name = cat_obj.get("parent_name")
-                if parent_name:
-                    for c in CATS:
-                        if parent_name.lower() == c.lower():
-                            main_category = c; break
-                if not main_category:
-                    slug = cat_obj.get("slug") or ""
-                    if "/" in slug:
-                        main = slug.split("/", 1)[0]
-                        mapping = {
-                            "film & video":"Film & Video","music":"Music","publishing":"Publishing","games":"Games",
-                            "technology":"Technology","design":"Design","art":"Art","food":"Food","fashion":"Fashion",
-                            "theater":"Theater","comics":"Comics","photography":"Photography","crafts":"Crafts",
-                            "journalism":"Journalism","dance":"Dance"
-                        }
-                        main_category = mapping.get(main.lower(), main.title())
-
-        # title (fallback)
-        if not title:
-            title = proj.get("name") or None
-
-        # launch + deadline
+        # Launch date
         state = proj.get("state")
         launched_ts = proj.get("launched_at") or (proj.get("state_changed_at") if state == "live" else None)
         if launched_ts:
-            try:
-                launched_unix = int(float(launched_ts))
-            except Exception:
-                launched_unix = None
-        if not deadline_unix:
-            for k in ("deadline","deadline_at","deadline_ts","deadline_time","deadline_unix"):
-                if proj.get(k) is not None:
-                    try:
-                        deadline_unix = int(float(proj[k])); break
-                    except Exception:
-                        pass
+            launch_unix_utc = int(launched_ts)
+            launch_iso_utc = datetime.fromtimestamp(launch_unix_utc, tz=timezone.utc).isoformat()
     except Exception:
         pass
 
-    return {
+    dico_du_cul = {
         "title": title,
-        "main_category": main_category,
-        "country": country_name,
-        "usd_goal_real": usd_goal_real,
-        "usd_pledged_real": usd_pledged_real,
-        "deadline": (datetime.fromtimestamp(deadline_unix, tz=timezone.utc).strftime('%d-%m-%Y')
-                     if isinstance(deadline_unix, (int, float)) else None),
-        "launched": (datetime.fromtimestamp(launched_unix, tz=timezone.utc).strftime('%d-%m-%Y')
-                     if isinstance(launched_unix, (int, float)) else None),
+        "main_category": main_category,          # ex: 'Crafts'
+        "country": location_text,                # ex: 'Japan'
+        "usd_goal_real": usd_goal_real,          # ex: 2031.0
+        "usd_pledged_real": usd_pledged_real,    # -> devrait refléter l’affichage en $
+        "deadline": (
+            datetime.utcfromtimestamp(deadline_unix).strftime('%d-%m-%Y')
+             if deadline_unix is not None else None),
+        "launched": (
+            datetime.utcfromtimestamp(launch_unix_utc).strftime('%d-%m-%Y')
+            if launch_unix_utc is not None else None),
     }
 
-# ---------- public ----------
-def scrape_kickstarter_metadata(url):
-    """
-    DOM (Selenium) → stats.json (proj) → __NEXT_DATA__.
-    En cloud, si le DOM est incomplet (consent/botwall), on rebouche TOUT
-    (title/category/country/goal/deadline) depuis /stats.json comme en fallback.
-    """
-    base = _base_url(url)
+    return dico_du_cul
 
-    # 1) Selenium
-    try:
-        from selenium.webdriver.support.ui import WebDriverWait
-        driver = _make_driver()
-        wait = WebDriverWait(driver, 20)
-        try:
-            driver.get(base)
-            wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-
-            header_text = driver.execute_script("""
-              const head = document.querySelector("[data-test-id='hero__stats']") ||
-                            document.querySelector("[data-test-id='hero__content']") ||
-                            document.querySelector("main") || document.body;
-              return (head.innerText || "").trim();
-            """) or ""
-            header_text = header_text.replace("\u00A0"," ").replace("\u202f"," ")
-            header_text = re.sub(r"\s+"," ", header_text)
-
-            title = (driver.execute_script("""
-              const m = document.querySelector("meta[property='og:title']");
-              return m ? m.getAttribute("content") : null;
-            """) or "").strip() or driver.title.replace(" — Kickstarter", "").strip() or None
-
-            cat_text = driver.execute_script("""
-              const el = document.querySelector("nav[aria-label='breadcrumb'] a[href*='/categories/']");
-              return el ? (el.textContent || "").trim() : null;
-            """)
-            main_category = None
-            if cat_text:
-                for c in CATS:
-                    if cat_text.strip().lower() == c.lower():
-                        main_category = c; break
-            if not main_category:
-                hits = []
-                for c in CATS:
-                    m = re.search(rf"\b{re.escape(c)}\b", header_text, flags=re.I)
-                    if m: hits.append((m.start(), c))
-                main_category = min(hits)[1] if hits else None
-
-            lines = [l.strip() for l in (header_text or "").split("\n") if l.strip()]
-            country_name = next((l.split(",")[-1].strip() for l in lines if "," in l), None)
-
-            # GOAL depuis DOM (comme ta version)
-            usd_goal_real = None
-            m_goal = re.search(r"of\s*([$€¥£])\s*([\d\s.,]+)\s*goal", header_text, flags=re.I)
-            if not m_goal:
-                m_goal = re.search(r"\bGoal\b[^$€¥£]*([$€¥£])\s*([\d\s.,]+)", header_text, flags=re.I)
-            if m_goal:
-                usd_goal_real = _parse_amount(m_goal.group(2))
-            if usd_goal_real is None:
-                full_text_goal = driver.execute_script("return document.body ? document.body.innerText : ''") or ""
-                full_text_goal = full_text_goal.replace("\u00A0"," ").replace("\u202f"," ")
-                full_text_goal = re.sub(r"\s+"," ", full_text_goal)
-                m_goal2 = (
-                    re.search(r"\$\s*([\d\s.,]+)\s*goal\b", full_text_goal, flags=re.I) or
-                    re.search(r"\bgoal\b[^$€¥£]*\$\s*([\d\s.,]+)", full_text_goal, flags=re.I) or
-                    re.search(r"\bobjectif\b[^$€¥£]*\$\s*([\d\s.,]+)", full_text_goal, flags=re.I)
-                )
-                if m_goal2:
-                    usd_goal_real = _parse_amount(m_goal2.group(1))
-
-            # PLEDGED DOM (best-effort)
-            usd_pledged_real = None
-            m_pl = re.search(r"\$[\s]*([\d\s.,]+)\s*pledged\b", header_text, flags=re.I)
-            if not m_pl:
-                m_pl = re.search(r"([\d\s.,]+)\s*\$\s*engag", header_text, flags=re.I)
-            if m_pl:
-                usd_pledged_real = _parse_amount(m_pl.group(1))
-
-            # deadline DOM
-            deadline_text = driver.execute_script("""
-              const el = document.querySelector("[data-test-id='deadline-exists']");
-              return el ? (el.textContent||"").trim() : null;
-            """)
-            _, deadline_unix = _parse_deadline(deadline_text or header_text)
-
-            # __NEXT_DATA__ (pour fallback goal)
-            page_html = driver.page_source or ""
-            next_json = None
-            mnext = re.search(r'(?is)<script\s+id=["\']__NEXT_DATA__["\']\s+type=["\']application/json["\']\s*>(.*?)</script>', page_html)
-            if mnext:
-                try: next_json = json.loads(mnext.group(1))
-                except Exception: next_json = None
-
-        finally:
-            try: driver.quit()
-            except: pass
-
-        # /stats.json (reboucher tout ce qui manque, comme en fallback)
-        s = _make_session(base)
-        try:
-            rj = s.get(base + "/stats.json", timeout=15)
-            if rj.status_code == 403:
-                rj = s.get(base + "/stats.json", timeout=15)
-            rj.raise_for_status()
-            sj = rj.json()
-            proj = (sj.get("data", {}).get("project") or sj.get("project") or (sj if isinstance(sj, dict) else {}))
-
-            # pledged
-            if usd_pledged_real is None:
-                val_usd_direct = proj.get("usd_pledged") or proj.get("usd_pledged_real") or proj.get("converted_pledged_amount")
-                if val_usd_direct is not None:
-                    try: usd_pledged_real = round(float(val_usd_direct), 2)
-                    except Exception: usd_pledged_real = _parse_amount(str(val_usd_direct))
-                if usd_pledged_real is None:
-                    pledged_val = proj.get("pledged")
-                    fx_rate = proj.get("fx_rate") or proj.get("static_usd_rate") or proj.get("usd_rate")
-                    try:
-                        if pledged_val is not None and fx_rate:
-                            usd_pledged_real = round(float(pledged_val) * float(fx_rate), 2)
-                        elif pledged_val is not None:
-                            usd_pledged_real = round(float(pledged_val), 2)
-                    except Exception:
-                        pass
-
-            # goal
-            if usd_goal_real is None:
-                usd_goal_real = _extract_usd_goal_usd(proj, next_json)
-
-            # title / category / country fallbacks (CRUCIAL pour le cloud)
-            if not title:
-                title = proj.get("name") or None
-
-            if not main_category:
-                cat_obj = proj.get("category") or {}
-                if isinstance(cat_obj, dict):
-                    parent_name = cat_obj.get("parent_name")
-                    if parent_name:
-                        for c in CATS:
-                            if parent_name.lower() == c.lower():
-                                main_category = c; break
-                    if not main_category:
-                        slug = cat_obj.get("slug") or ""
-                        if "/" in slug:
-                            main = slug.split("/", 1)[0]
-                            mapping = {
-                                "film & video":"Film & Video","music":"Music","publishing":"Publishing","games":"Games",
-                                "technology":"Technology","design":"Design","art":"Art","food":"Food","fashion":"Fashion",
-                                "theater":"Theater","comics":"Comics","photography":"Photography","crafts":"Crafts",
-                                "journalism":"Journalism","dance":"Dance"
-                            }
-                            main_category = mapping.get(main.lower(), main.title())
-
-            if not country_name:
-                country_code = (proj.get("country") or proj.get("country_code"))
-                if not country_code:
-                    loc = proj.get("location") or {}
-                    if isinstance(loc, dict):
-                        country_code = loc.get("country") or loc.get("country_code")
-                if not country_code:
-                    creator = proj.get("creator") or {}
-                    if isinstance(creator, dict) and isinstance(creator.get("location"), dict):
-                        country_code = creator["location"].get("country")
-                if country_code:
-                    ISO2_TO_NAME = {
-                        "US":"United States","GB":"United Kingdom","CA":"Canada","AU":"Australia","NZ":"New Zealand",
-                        "JP":"Japan","DE":"Germany","FR":"France","ES":"Spain","IT":"Italy","NL":"Netherlands",
-                        "SE":"Sweden","NO":"Norway","DK":"Denmark","CH":"Switzerland","HK":"Hong Kong","SG":"Singapore",
-                        "MX":"Mexico","BR":"Brazil","IE":"Ireland","BE":"Belgium","AT":"Austria","KR":"South Korea",
-                        "CN":"China","TW":"Taiwan"
-                    }
-                    country_name = ISO2_TO_NAME.get(str(country_code).upper(), country_code)
-
-            # launched / deadline from proj if needed
-            launch_unix = None
-            state = proj.get("state")
-            launched_ts = proj.get("launched_at") or (proj.get("state_changed_at") if state == "live" else None)
-            if launched_ts:
-                try: launch_unix = int(float(launched_ts))
-                except Exception: launch_unix = None
-
-            if not isinstance(locals().get("deadline_unix"), (int, float)) or locals().get("deadline_unix") is None:
-                deadline_unix = None
-                for k in ("deadline","deadline_at","deadline_ts","deadline_time","deadline_unix"):
-                    if proj.get(k) is not None:
-                        try:
-                            deadline_unix = int(float(proj[k])); break
-                        except Exception:
-                            pass
-        except Exception:
-            # si /stats.json ne répond pas, on tombera sur le requests fallback
-            return _requests_fallback(base)
-
-        return {
-            "title": title,
-            "main_category": main_category,
-            "country": country_name,
-            "usd_goal_real": usd_goal_real,
-            "usd_pledged_real": usd_pledged_real,
-            "deadline": (datetime.fromtimestamp(deadline_unix, tz=timezone.utc).strftime('%d-%m-%Y')
-                         if isinstance(locals().get("deadline_unix"), (int, float)) else None),
-            "launched": (datetime.fromtimestamp(launch_unix, tz=timezone.utc).strftime('%d-%m-%Y')
-                         if isinstance(locals().get("launch_unix"), (int, float)) else None),
-        }
-
-    except Exception:
-        # 2) Sans Selenium
-        return _requests_fallback(base)
